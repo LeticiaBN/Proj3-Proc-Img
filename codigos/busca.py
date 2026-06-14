@@ -12,7 +12,7 @@ Saidas:
   resultados/busca_top5_<combo>.png
 """
 
-import csv
+import os
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +20,8 @@ import matplotlib.pyplot as plt
 import imageio.v3 as iio
 
 
-RAIZ = Path("/Users/leticia.neves/Desktop/6sem/2027/leo/entrega3")
+# caminho padrao da entrega; pode ser sobrescrito por env var PROJ3_RAIZ
+RAIZ = Path(os.environ.get("PROJ3_RAIZ", "/Users/leticia.neves/Desktop/6sem/2027/leo/entrega3"))
 PETS = RAIZ / "pets256"
 FEAT = RAIZ / "features"
 SAIDA = RAIZ / "resultados"
@@ -30,8 +31,10 @@ SAIDA.mkdir(exist_ok=True)
 def carregar():
     feats = {
         "hsv":   np.load(FEAT / "hsv.npy"),
+        "corr":  np.load(FEAT / "corr.npy"),
         "hog":   np.load(FEAT / "hog.npy"),
         "lbp":   np.load(FEAT / "lbp.npy"),
+        "glcm":  np.load(FEAT / "glcm.npy"),
         "gabor": np.load(FEAT / "gabor.npy"),
     }
     labels = np.load(FEAT / "labels.npy")
@@ -60,8 +63,13 @@ def pairwise_euclid(X):
 
 def precision_at_k(D, labels, k_list=(1, 5)):
     """
-    Media de precision@k considerando apenas imagens-consulta cujas
+    Media de precision@k e mAP considerando apenas imagens-consulta cujas
     classes tem >=2 fotos (senao nao da pra acertar).
+
+    mAP = media da Average Precision por consulta, onde a AP percorre o ranking
+    completo e media as precisoes nos pontos em que aparece um item relevante
+    (mesma classe), normalizando pelo numero de relevantes. E a metrica padrao
+    de retrieval, mais robusta que P@k para classes de tamanho variavel.
     """
     N = len(labels)
     D2 = D.copy()
@@ -76,6 +84,22 @@ def precision_at_k(D, labels, k_list=(1, 5)):
         same = (labels[top] == labels[:, None])  # (N, k)
         prec = same.mean(axis=1)  # precisao por consulta
         out[k] = prec[valid].mean()
+
+    # mAP
+    aps = []
+    for q in range(N):
+        if not valid[q]:
+            continue
+        order = rank[q]
+        order = order[order != q]                      # remove a propria consulta
+        rel = (labels[order] == labels[q]).astype(float)
+        n_rel = rel.sum()
+        if n_rel == 0:
+            continue
+        cum = np.cumsum(rel)
+        prec_at = cum / (np.arange(len(rel)) + 1)
+        aps.append((prec_at * rel).sum() / n_rel)
+    out["mAP"] = float(np.mean(aps)) if aps else 0.0
     return out
 
 
@@ -124,14 +148,19 @@ def main():
 
     configs = [
         ("hsv",),
+        ("corr",),
         ("hog",),
         ("lbp",),
+        ("glcm",),
         ("gabor",),
-        ("hsv", "hog"),
-        ("hsv", "lbp"),
+        ("hsv", "corr"),
+        ("hsv", "glcm"),
         ("hsv", "gabor"),
-        ("hsv", "hog", "lbp"),
-        ("hsv", "hog", "lbp", "gabor"),
+        ("hsv", "glcm", "gabor"),
+        ("hsv", "corr", "glcm"),
+        ("hsv", "lbp", "glcm", "gabor"),
+        ("hsv", "corr", "lbp", "glcm", "gabor"),
+        ("hsv", "hog", "lbp", "glcm", "corr", "gabor"),
     ]
 
     # escolhe 4 queries de classes com >=5 imagens
@@ -142,15 +171,15 @@ def main():
     candidatas = [v[0] for v in classes_grandes.values() if len(v) >= 5]
     queries = rng.choice(candidatas, size=4, replace=False).tolist()
 
-    linhas = ["combinacao | dim | P@1 | P@5"]
-    linhas.append("-" * 50)
+    linhas = ["combinacao | dim | mAP | P@1 | P@5"]
+    linhas.append("-" * 56)
 
     for cfg in configs:
         X = concat_norm(feats, list(cfg))
         D = pairwise_euclid(X)
         p = precision_at_k(D, labels, k_list=(1, 5))
         nome = "+".join(cfg)
-        linhas.append(f"{nome:<28} | {X.shape[1]:>5} | {p[1]:.3f} | {p[5]:.3f}")
+        linhas.append(f"{nome:<28} | {X.shape[1]:>5} | {p['mAP']:.3f} | {p[1]:.3f} | {p[5]:.3f}")
         out = SAIDA / f"busca_top5_{nome.replace('+','_')}.png"
         plot_top5(D, queries, labels, classnames, filenames, out,
                   titulo=f"Busca - {nome}")

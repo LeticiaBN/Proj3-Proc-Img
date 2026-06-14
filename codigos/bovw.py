@@ -15,6 +15,7 @@ Saidas:
   resultados/bovw_top5.png
 """
 
+import os
 import pickle
 from pathlib import Path
 
@@ -24,7 +25,8 @@ import imageio.v3 as iio
 from sklearn.cluster import MiniBatchKMeans
 
 
-RAIZ = Path("/Users/leticia.neves/Desktop/6sem/2027/leo/entrega3")
+# caminho padrao da entrega; pode ser sobrescrito por env var PROJ3_RAIZ
+RAIZ = Path(os.environ.get("PROJ3_RAIZ", "/Users/leticia.neves/Desktop/6sem/2027/leo/entrega3"))
 PETS = RAIZ / "pets256"
 FEAT = RAIZ / "features"
 SAIDA = RAIZ / "resultados"
@@ -79,6 +81,7 @@ def pairwise_euclid(X):
 
 
 def precision_at_k(D, labels, k_list=(1, 5)):
+    N = len(labels)
     D2 = D.copy(); np.fill_diagonal(D2, np.inf)
     rank = np.argsort(D2, axis=1)
     uniq, counts = np.unique(labels, return_counts=True)
@@ -89,6 +92,21 @@ def precision_at_k(D, labels, k_list=(1, 5)):
         top = rank[:, :k]
         same = (labels[top] == labels[:, None])
         out[k] = same.mean(1)[valid].mean()
+    # mAP (Average Precision media sobre consultas validas)
+    aps = []
+    for q in range(N):
+        if not valid[q]:
+            continue
+        order = rank[q]
+        order = order[order != q]
+        rel = (labels[order] == labels[q]).astype(float)
+        n_rel = rel.sum()
+        if n_rel == 0:
+            continue
+        cum = np.cumsum(rel)
+        prec_at = cum / (np.arange(len(rel)) + 1)
+        aps.append((prec_at * rel).sum() / n_rel)
+    out["mAP"] = float(np.mean(aps)) if aps else 0.0
     return out
 
 
@@ -140,7 +158,7 @@ def main():
 
     D = pairwise_euclid(hists)
     p = precision_at_k(D, labels, k_list=(1, 5))
-    txt = f"BoVW (K={K_VW})  P@1={p[1]:.3f}  P@5={p[5]:.3f}"
+    txt = f"BoVW (K={K_VW})  mAP={p['mAP']:.3f}  P@1={p[1]:.3f}  P@5={p[5]:.3f}"
     print("\n" + txt)
     (SAIDA / "bovw_precisao.txt").write_text(txt + "\n")
 
